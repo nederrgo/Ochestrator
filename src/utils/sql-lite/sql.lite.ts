@@ -87,7 +87,7 @@ export function upsertTestRun(db: Database.Database, data: TestRun): number {
                 error = ?,
                 duration_ms = ?,
                 test_sequence = ?
-            WHERE test_id = ?
+            WHERE test_id = ? AND test_name = ?
         `).run(
             data.test_name,
             data.test_search_name,
@@ -97,7 +97,8 @@ export function upsertTestRun(db: Database.Database, data: TestRun): number {
             data.error || null,
             data.duration_ms || null,
             data.test_sequence || null,
-            data.test_id
+            data.test_id,
+            data.test_name
         );
 
         // If no rows were updated, insert a new record
@@ -135,6 +136,31 @@ export function upsertTestRun(db: Database.Database, data: TestRun): number {
         return row.id;
     })(data);
 }
+
+/**
+ * Retrieves all test runs for a specific test ID
+ * @param db Database instance
+ * @param testId The test ID to search for
+ * @returns Array of TestRun objects matching the test ID
+ */
+export function getTestRunsById(db: Database.Database, testId: string): TestRun[] {
+  const stmt = db.prepare(`
+    SELECT * FROM test_runs 
+    WHERE test_id = ?
+    ORDER BY start_time DESC
+  `);
+  
+  return stmt.all(testId) as TestRun[];
+}
+export function getTestRunsByIdAndTestSearchName(db: Database.Database, testId: string, testSearchName: string): TestRun {
+    const stmt = db.prepare(`
+      SELECT * FROM test_runs 
+      WHERE test_id = ? AND test_name = ?
+      ORDER BY start_time DESC
+    `);
+    
+    return stmt.all(testId, testSearchName)[0] as TestRun;
+  }
 
 // Example usage:
 // const db = initializeSQLite();
