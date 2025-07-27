@@ -1,0 +1,212 @@
+import * as sqlite3 from 'sqlite3-offline-next';
+import { join } from 'path';
+import { mkdirSync, existsSync } from 'fs';
+
+/**
+ * Interface for the Database wrapper
+ */
+export interface Database {
+    db: sqlite3.Database;
+}
+
+/**
+ * Initializes an SQLite database with a test_runs table
+ * @param dbPath Optional custom path for the database file
+ * @returns Database instance
+ */
+export function initializeSQLite(dbPath?: string): Database {
+    // Use provided path or default to 'data' directory in the project root
+    const databasePath = dbPath || join(process.cwd(), 'data', 'test-results.db');
+
+    // Ensure the directory exists
+    const dirPath = join(databasePath, '..');
+    if (!existsSync(dirPath)) {
+        mkdirSync(dirPath, { recursive: true });
+    }
+
+    // Initialize the database
+    const db = new sqlite3.Database(databasePath, (err) => {
+        if (err) {
+            console.error(err.message);
+        }
+    });
+
+    // Enable WAL mode for better concurrency
+    db.run('PRAGMA journal_mode = WAL');
+
+    // Enable foreign key constraints
+    db.run('PRAGMA foreign_keys = ON');
+
+    // Create tables if they don't exist
+    db.serialize(() => {
+        db.run(`
+      CREATE TABLE IF NOT EXISTS test_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        test_id TEXT NOT NULL,
+        test_name TEXT NOT NULL,
+        test_search_name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        start_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+        end_time DATETIME,
+        result TEXT,
+        error TEXT,
+        duration_ms INTEGER,
+        test_sequence TEXT
+      );
+    `);
+
+        db.run(`CREATE INDEX IF NOT EXISTS idx_test_runs_test_id ON test_runs(test_id);`);
+        db.run(`CREATE INDEX IF NOT EXISTS idx_test_runs_status ON test_runs(status);`);
+        db.run(`CREATE INDEX IF NOT EXISTS idx_test_runs_timestamp ON test_runs(start_time);`);
+    });
+
+    return { db };
+}
+
+/**
+ * Interface for test run data
+ */
+export interface TestRun {
+    id?: number;
+    test_id: string;
+    test_name: string;
+    test_search_name: string;
+    status: 'pending' | 'running' | 'passed' | 'failed' | 'error' | string;
+    start_time?: string | Date;
+    end_time?: string | Date | null;
+    result?: string | null;
+    error?: string | null;
+    duration_ms?: number | null;
+    test_sequence?: string | null;
+}
+
+/**
+ * Upserts a test run record in a transaction
+ * @param db Database instance
+ * @param data Test run data to upsert
+ * @returns A promise that resolves with the inserted/updated test run ID
+ */
+export function upsertTestRun(db: Database, data: TestRun): Promise<number> {
+    return new Promise((resolve, reject) => {
+        db.db.serialize(() => {
+            const updateSql = `
+                UPDATE test_runs 
+                SET 
+                    test_name = ?,
+                    test_search_name = ?,
+                    status = ?,
+                    end_time = ?,
+                    result = ?,
+                    error = ?,
+                    duration_ms = ?,
+                    test_sequence = ?
+                WHERE test_id = ? AND test_name = ?
+            `;
+            const updateParams = [
+                data.test_name,
+                data.test_search_name,
+                data.status,
+                data.end_time || null,
+                data.result || null,
+                data.error || null,
+                data.duration_ms || null,
+                data.test_sequence || null,
+                data.test_id,
+                data.test_name,
+            ];
+
+            db.db.run(updateSql, updateParams, function (err) {
+                if (err) {
+                    return reject(err);
+                }
+
+                if (this.changes === 0) {
+                    const insertSql = `
+                        INSERT INTO test_runs (
+                            test_id,
+                            test_name,
+                            test_search_name,
+                            status,
+                            start_time,
+                            end_time,
+                            result,
+                            error,
+                            duration_ms,
+                            test_sequence
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    `;
+                    const insertParams = [
+                        data.test_id,
+                        data.test_name,
+                        data.test_search_name,
+                        data.status,
+                        data.start_time || new Date().toISOString(),
+                        data.end_time || null,
+                        data.result || null,
+                        data.error || null,
+                        data.duration_ms || null,
+                        data.test_sequence || null,
+                    ];
+                    db.db.run(insertSql, insertParams, function (err) {
+                        if (err) {
+                            return reject(err);
+                        }
+                        resolve(this.lastID);
+                    });
+                } else {
+                    db.db.get('SELECT id FROM test_runs WHERE test_id = ?', [data.test_id], (err, row: { id: number }) => {
+                        if (err) {
+                            return reject(err);
+                        }
+                        resolve(row.id);
+                    });
+                }
+            });
+        });
+    });
+}
+
+/**
+ * Retrieves all test runs for a specific test ID
+ * @param db Database instance
+ * @param testId The test ID to search for
+ * @returns A promise that resolves with an array of TestRun objects
+ */
+export function getTestRunsById(db: Database, testId: string): Promise<TestRun[]> {
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT * FROM test_runs 
+            WHERE test_id = ?
+            ORDER BY start_time DESC
+        `;
+        db.db.all(sql, [testId], (err, rows) => {
+            if (err) {
+                return reject(err);
+            }
+            resolve(rows as TestRun[]);
+        });
+    });
+}
+
+/**
+ * Retrieves a specific test run by test ID and test search name
+ * @param db Database instance
+ * @param testId The test ID to search for
+ * @param testSearchName The test search name to search for
+ * @returns A promise that resolves with a single TestRun object
+ */
+export function getTestRunsByIdAndTestSearchName(db: Database, testId: string, testSearchName: string): Promise<TestRun> {
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT * FROM test_runs 
+            WHERE test_id = ? AND test_name = ?
+            ORDER BY start_time DESC
+        `;
+        db.db.get(sql, [testId, testSearchName], (err, row) => {
+            if (err) {
+                return reject(err);
+            }
+            resolve(row as TestRun);
+        });
+    });
+}
