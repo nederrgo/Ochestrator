@@ -1,0 +1,56 @@
+/**
+ * Atomically upserts a test run record using INSERT ... ON CONFLICT.
+ * This is the recommended, race-condition-free method.
+ * @param db Database instance
+ * @param data Test run data to upsert
+ * @returns A promise that resolves with the inserted/updated row's ID
+ */
+export function upsertTestRun(db: Database, data: TestRun): Promise<number> {
+    return new Promise((resolve, reject) => {
+        const sql = `
+            INSERT INTO test_runs (
+                test_id,
+                test_name,
+                test_search_name,
+                status,
+                start_time,
+                end_time,
+                result,
+                error,
+                duration_ms,
+                test_sequence
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(test_id, test_name) DO UPDATE SET
+                status = excluded.status,
+                end_time = excluded.end_time,
+                result = excluded.result,
+                error = excluded.error,
+                duration_ms = excluded.duration_ms,
+                test_sequence = excluded.test_sequence
+            RETURNING id;
+        `;
+
+        const params = [
+            data.test_id,
+            data.test_name,
+            data.test_search_name,
+            data.status,
+            data.start_time || new Date().toISOString(),
+            data.end_time || null,
+            data.result || null,
+            data.error || null,
+            data.duration_ms || null,
+            data.test_sequence || null,
+        ];
+
+        // Use db.get() because RETURNING returns a single row with the id
+        db.db.get(sql, params, function (err, row: { id: number }) {
+            if (err) {
+                return reject(err);
+            }
+            // `row.id` will contain the ID of either the newly inserted
+            // or the just-updated row.
+            resolve(row.id);
+        });
+    });
+}
