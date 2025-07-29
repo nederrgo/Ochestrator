@@ -61,3 +61,29 @@ export function upsertTestRun(db: Database, data: TestRun): Promise<number | nul
         });
     });
 }
+const row = db.prepare('SELECT sqlite_version() AS version').get();
+
+console.log(`SQLite library version: ${row.version}`);
+
+ INSERT INTO test_runs (
+                test_id,
+                test_name,
+                test_search_name,
+                status,
+                start_time,
+                end_time,
+                result,
+                error,
+                duration_ms,
+                test_sequence
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(test_id, test_name) DO UPDATE SET
+                status = excluded.status,
+                end_time = excluded.end_time,
+                result = excluded.result,
+                error = excluded.error,
+                duration_ms = excluded.duration_ms,
+                test_sequence = excluded.test_sequence
+            WHERE test_runs.status = 'pending'
+            RETURNING id; 
+is this a valid sql statment
