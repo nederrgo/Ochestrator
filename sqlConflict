@@ -1,11 +1,14 @@
 /**
- * Atomically upserts a test run record using INSERT ... ON CONFLICT.
- * This is the recommended, race-condition-free method.
+ * Atomically upserts a test run record.
+ * - If the record does not exist, it is inserted.
+ * - If the record exists AND its status is 'pending', it is updated.
+ * - If the record exists AND its status is not 'pending', nothing happens.
+ *
  * @param db Database instance
  * @param data Test run data to upsert
- * @returns A promise that resolves with the inserted/updated row's ID
+ * @returns A promise that resolves with the row's ID if an insert/update occurred, otherwise null.
  */
-export function upsertTestRun(db: Database, data: TestRun): Promise<number> {
+export function upsertTestRun(db: Database, data: TestRun): Promise<number | null> {
     return new Promise((resolve, reject) => {
         const sql = `
             INSERT INTO test_runs (
@@ -27,6 +30,10 @@ export function upsertTestRun(db: Database, data: TestRun): Promise<number> {
                 error = excluded.error,
                 duration_ms = excluded.duration_ms,
                 test_sequence = excluded.test_sequence
+            -- THIS IS THE CRUCIAL ADDITION:
+            -- The WHERE clause applies to the existing row in the 'test_runs' table.
+            -- The update will only happen if the existing row's status is 'pending'.
+            WHERE test_runs.status = 'pending'
             RETURNING id;
         `;
 
@@ -43,14 +50,14 @@ export function upsertTestRun(db: Database, data: TestRun): Promise<number> {
             data.test_sequence || null,
         ];
 
-        // Use db.get() because RETURNING returns a single row with the id
-        db.db.get(sql, params, function (err, row: { id: number }) {
+        // Use db.get() because RETURNING returns a single row (or nothing).
+        db.db.get(sql, params, function (err, row: { id: number } | undefined) {
             if (err) {
                 return reject(err);
             }
-            // `row.id` will contain the ID of either the newly inserted
-            // or the just-updated row.
-            resolve(row.id);
+            // If `row` is undefined, it means an update was skipped due to the WHERE clause.
+            // We resolve with `row.id` if it exists, otherwise `null`.
+            resolve(row ? row.id : null);
         });
     });
 }
